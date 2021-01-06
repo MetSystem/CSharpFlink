@@ -1,8 +1,10 @@
 ﻿using CSharpFlink.Core.Calculate;
 using CSharpFlink.Core.Expression.Operator;
 using CSharpFlink.Core.Model;
+using CSharpFlink.Core.Window;
 using CSharpFlink.Core.Window.Operator;
 using System;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
 
 namespace TestCommon
@@ -37,42 +39,25 @@ namespace TestCommon
             return GetWindowInterval((WindowIntervalType)num);
         }
 
-        public static ICalculate GetAggCalculate(AggregateCalculateType act)
+        public static ICalculate GetAggRandomCalculate(string resultId)
         {
-            ICalculate co=null;
-            if (act == AggregateCalculateType.C_Avg)
-            {
-                co = new Avg();
-            }
-            else if (act == AggregateCalculateType.C_Sum)
-            {
-                co = new Sum();
-            }
-            else if (act == AggregateCalculateType.C_Max)
-            {
-                co = new Max();
-            }
-            else if (act == AggregateCalculateType.C_Min)
-            {
-                co = new Min();
-            }
-
-            if(co==null)
-            {
-                co = new Avg();
-            }    
-            return co;
+            int num = _random.Next(0, 7);
+            return WindowTaskUtil.GetAggregateCalculate(resultId,(AggregateCalculateType)num);
         }
 
-        public static ICalculate GetAggRandomCalculate()
+        public static List<ICalculate> GetAggRandomCalculateList(string[] resultIdList)
         {
-            int num = _random.Next(0, 4);
-            return GetAggCalculate((AggregateCalculateType)num);
+            List<ICalculate> list = new List<ICalculate>();
+            foreach(string s in resultIdList)
+            {
+                list.Add(GetAggRandomCalculate(s));
+            }
+            return list;
         }
 
-        public static ICalculate GetExpCalculate()
+        public static ICalculate GetExpCalculate(string resultId)
         {
-            return new ExpressionCalculate();
+            return new ExpressionCalculate(resultId);
         }
 
         public static IMetaData GetMetaData(string id, DataType dataType,int delayWindowCount,int windowInterval)
@@ -83,10 +68,10 @@ namespace TestCommon
             {
                 md = new MetaData()
                 {
-                    window_id=id,
-                    tag_id = id,
-                    tag_time = DateTime.Now,
-                    tag_value = val.ToString()
+                    WindowId=id,
+                    TagId = id,
+                    TagTime = DateTime.Now,
+                    TagValue = val.ToString()
                 };
             }
             else if (DataType.HisData == dataType)
@@ -96,20 +81,20 @@ namespace TestCommon
 
                 md = new MetaData()
                 {
-                    window_id = id,
-                    tag_id = id,
-                    tag_time = dt,
-                    tag_value = val.ToString()
+                    WindowId = id,
+                    TagId = id,
+                    TagTime = dt,
+                    TagValue = val.ToString()
                 };
             }
             else
             {
                 md = new MetaData()
                 {
-                    window_id = id,
-                    tag_id = id,
-                    tag_time = DateTime.Now,
-                    tag_value = val.ToString()
+                    WindowId = id,
+                    TagId = id,
+                    TagTime = DateTime.Now,
+                    TagValue = val.ToString()
                 };
             }
             return md;

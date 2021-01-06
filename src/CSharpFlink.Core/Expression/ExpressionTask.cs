@@ -15,7 +15,7 @@ namespace CSharpFlink.Core.Expression
     /// </summary>
     public class ExpressionTask : IExpressionTask
     {
-        public ExpressionTask(string expId, string expName, ExpressionCalculateType expCalculateType, int timerInterval, string script,ICalculate calc)
+        public ExpressionTask(string expId, string expName, ExpressionCalculateType expCalculateType, int timerInterval, string script,List<ICalculate> calcs)
         {
             Id = expId;
             Name = expName;
@@ -26,13 +26,13 @@ namespace CSharpFlink.Core.Expression
 
             PatternDataList.AddRange(GetPatternDataList(Script));
 
-            if (calc == null)
+            if (calcs == null || calcs.Count<=0)
             {
-                CalculateOperator = new ExpressionCalculate();
+                CalculateOperators = new List<ICalculate>() { new ExpressionCalculate($"{Id}_result") };
             }
             else
             {
-                CalculateOperator = calc;
+                CalculateOperators = calcs;
             }
 
             _timer = new System.Timers.Timer(timerInterval);
@@ -65,11 +65,11 @@ namespace CSharpFlink.Core.Expression
             {
                 mds[i] = new MetaData()
                 {
-                    tag_id = PatternDataList[i]
+                    TagId = PatternDataList[i]
                 };
             }
 
-            ICalculateContext calculateContext = new CalculateContext(Name, ExpressionCalculateType.ToString(), nowTime, nowTime, CalculateType.Expression, new CalculateInpute(Id, Script, nowTime, mds), null,CalculateOperator);
+            ICalculateContext calculateContext = new CalculateContext(Name, ExpressionCalculateType.ToString(), nowTime, nowTime, CalculateType.Expression, new CalculateInpute(Id, Script, nowTime, mds), null,CalculateOperators);
 
             GlobalContext.ActionBlock.Post(calculateContext);
 
@@ -104,6 +104,7 @@ namespace CSharpFlink.Core.Expression
         public string Script { get; set; }
 
         private ExpressionCalculateType _expressionCalculateType = ExpressionCalculateType.TimerCalculate;
+
         /// <summary>
         /// 表达式计算类型
         /// </summary>
@@ -132,7 +133,7 @@ namespace CSharpFlink.Core.Expression
         /// </summary>
         public List<string> PatternDataList { get; set; }
 
-        public ICalculate CalculateOperator { get; set; }
+        public List<ICalculate> CalculateOperators { get; set; }
 
         public IGlobalContext GlobalContext { get; internal set; }
 

@@ -31,12 +31,39 @@ namespace CSharpFlink.Core.Window
         public string Name { get; set; }
 
         public IMetaData Current { get; set; }
+
         /// <summary>
         /// 当前窗口时间范围，秒
         /// </summary>
         public int WindowInterval { get; set; }
 
-        public ICalculate CalculateOperator { get; set; }
+
+        private bool _IsOpenWindow = true;
+        /// <summary>
+        /// 是否打开窗口，如是false,则只是缓存当前的最新的数据。否则，按窗口走。
+        /// </summary>
+        public bool IsOpenWindow
+        {
+            get 
+            {
+                return _IsOpenWindow;
+            }
+            set
+            {
+                if(value)
+                {
+                    _timer.Enabled = true;
+                }
+                else
+                {
+                    _timer.Enabled = false;
+                }
+
+                _IsOpenWindow = value;
+            }
+        }
+
+        public List<ICalculate> CalculateOperators { get; set; }
 
         /// <summary>
         /// 延迟多少窗口，防止后来数据，需要重新计算
@@ -45,48 +72,30 @@ namespace CSharpFlink.Core.Window
 
         public IGlobalContext GlobalContext { get; internal set; }
 
-        public WindowTask(string tagWindowId, string tagWindowName, ICalculate calc)
+        public WindowTask(string tagWindowId, string tagWindowName, List<ICalculate> calcs)
         {
-            Id = tagWindowId;
-            Name = tagWindowName;
-            DelayWindowCount = 0;
-            WindowInterval = 5;
-
-            if (calc == null)
-            {
-                CalculateOperator = new Avg();
-            }
-            else
-            {
-                CalculateOperator = calc;
-            }
-
-            _cache = new DataPool();
-            
-            _delayCache = new ConcurrentQueue<DataPool>();
-
-            SlidTimeWindow(DateTime.Now);
-
-            _timer = new System.Timers.Timer(1000);
-            _timer.Elapsed += OnTimedEvent;
-            _timer.AutoReset = true;
-            _timer.Enabled = true;
+            InitWindow(tagWindowId, tagWindowName, true,5, 0, calcs);
         }
 
-        public WindowTask(string tagWindowId, string tagWindowName, int windowInterval,int delayWindowCount, ICalculate calc) 
+        public WindowTask(string tagWindowId, string tagWindowName,bool isOpenWindow, int windowInterval,int delayWindowCount, List<ICalculate> calcs) 
+        {
+            InitWindow(tagWindowId, tagWindowName, isOpenWindow, windowInterval, delayWindowCount, calcs);
+        }
+
+        private void InitWindow(string tagWindowId, string tagWindowName, bool isOpenWindow, int windowInterval, int delayWindowCount, List<ICalculate> calcs)
         {
             Id = tagWindowId;
             Name = tagWindowName;
             WindowInterval = windowInterval;
             DelayWindowCount = delayWindowCount;
 
-            if (calc == null)
+            if (calcs == null || calcs.Count<=0)
             {
-                CalculateOperator = new Avg();
+                CalculateOperators = new List<ICalculate>() { new Avg($"{Id}_avg") };
             }
             else
             {
-                CalculateOperator = calc;
+                CalculateOperators = calcs;
             }
 
             _cache = new DataPool();
@@ -98,7 +107,8 @@ namespace CSharpFlink.Core.Window
             _timer = new System.Timers.Timer(1000);
             _timer.Elapsed += OnTimedEvent;
             _timer.AutoReset = true;
-            _timer.Enabled = true;
+
+            IsOpenWindow = isOpenWindow;
         }
 
         ~WindowTask()
@@ -135,7 +145,7 @@ namespace CSharpFlink.Core.Window
         {
             if (ds.Length > 0)
             {
-                ICalculateContext calculateContext = new CalculateContext(Name, desc + "_" + CalculateOperator.GetType().ToString(), leftTime, rightTime, CalculateType.Aggregate, new CalculateInpute(sessinId, "", nowTime, ds), null, CalculateOperator);
+                ICalculateContext calculateContext = new CalculateContext(Name, desc + "_" + CalculateOperators.Count.ToString(), leftTime, rightTime, CalculateType.Aggregate, new CalculateInpute(sessinId, "", rightTime, ds), null, CalculateOperators);
 
                 GlobalContext.ActionBlock.Post(calculateContext);
 
@@ -156,7 +166,7 @@ namespace CSharpFlink.Core.Window
             _cache.LeftTime = DateTimeUtil.TimeStampToDateTime(curLong - offsetTime);
             _cache.RightTime = _cache.LeftTime.AddSeconds(WindowInterval);
 
-            Console.WriteLine($"{Name}-SlidTimeWindow:{CalculateOperator.GetType().ToString ()}_{WindowInterval.ToString()}:{_cache.LeftTime.ToString()}-{_cache.RightTime.ToString()}");
+            Console.WriteLine($"{Name}-SlidTimeWindow:{CalculateOperators.Count.ToString ()}_{WindowInterval.ToString()}:{_cache.LeftTime.ToString()}-{_cache.RightTime.ToString()}");
         }
 
         private void CheckDelayCache()
@@ -181,43 +191,45 @@ namespace CSharpFlink.Core.Window
 
         public void AddMeteData(IMetaData md)
         {
-            //this.CheckCalculateOperator();
-
             this.Current = md;
-            if (md.tag_time >= _cache.LeftTime
-                && md.tag_time < _cache.RightTime)
+
+            if (IsOpenWindow)
             {
-                IMetaData oldMD = _cache.Pool.Where(t => t.tag_time.ToString() == md.tag_time.ToString()).FirstOrDefault();
-                if (oldMD == null)
+                if (md.TagTime >= _cache.LeftTime
+                    && md.TagTime < _cache.RightTime)
                 {
-                    _cache.Pool.Add(md);
+                    IMetaData oldMD = _cache.Pool.Where(t => t.TagTime.ToString() == md.TagTime.ToString()).FirstOrDefault();
+                    if (oldMD == null)
+                    {
+                        _cache.Pool.Add(md);
+                    }
+                    else
+                    {
+                        oldMD.TagValue = md.TagValue;
+                    }
                 }
                 else
                 {
-                    oldMD.tag_value = md.tag_value;
-                }
-            }
-            else
-            {
-                foreach (DataPool dp in _delayCache)
-                {
-                    if (md.tag_time >= dp.LeftTime
-                     && md.tag_time < dp.RightTime)
+                    foreach (DataPool dp in _delayCache)
                     {
-                        IMetaData oldMD = dp.Pool.Where(t => t.tag_time.ToString () == md.tag_time.ToString ()).FirstOrDefault();
-                        if (oldMD == null)
+                        if (md.TagTime >= dp.LeftTime
+                         && md.TagTime < dp.RightTime)
                         {
-                            dp.Pool.Add(md);
-                        }
-                        else
-                        {
-                            oldMD.tag_value = md.tag_value;
-                        }
+                            IMetaData oldMD = dp.Pool.Where(t => t.TagTime.ToString() == md.TagTime.ToString()).FirstOrDefault();
+                            if (oldMD == null)
+                            {
+                                dp.Pool.Add(md);
+                            }
+                            else
+                            {
+                                oldMD.TagValue = md.TagValue;
+                            }
 
-                        //重新计算
-                        PublishCalculate(Id, DateTime.Now, dp.LeftTime,dp.RightTime, dp.Pool.ToArray(), "补发数据");
+                            //重新计算
+                            PublishCalculate(Id, DateTime.Now, dp.LeftTime, dp.RightTime, dp.Pool.ToArray(), "补发数据");
 
-                        break;
+                            break;
+                        }
                     }
                 }
             }

@@ -47,8 +47,12 @@ namespace CSharpFlink.Core.Task
 
         private bool _remoteInvokeExit = false;
 
-        public MasterTaskManager()
+        private IChannelMessageHandler _channelMessageHandler;
+
+        public MasterTaskManager(IChannelMessageHandler channelMessageHandler)
         {
+            _channelMessageHandler = channelMessageHandler;
+
             _winList = new ConcurrentDictionary<string, IWindowTask>();
             _expList = new ConcurrentDictionary<string, IExpressionTask>();
             _workList = new ConcurrentDictionary<string, IWorker>();
@@ -84,7 +88,6 @@ namespace CSharpFlink.Core.Task
                             int parallelNum = 0;
                             if (taskNum >= workerNum)
                             {
-                                //parallelNum = taskNum - (taskNum % workerNum);
                                 parallelNum = workerNum;
                             }
                             else
@@ -142,7 +145,7 @@ namespace CSharpFlink.Core.Task
                                             {
                                                 string remoteInfo = String.Empty;
 
-                                                MasterServer.Send(worker, data, out remoteInfo);
+                                                _channelMessageHandler.Send(worker.Id, data, out remoteInfo);
 
                                                 data = null;
 
@@ -231,11 +234,11 @@ namespace CSharpFlink.Core.Task
             }
         }
 
-        public void AddWindowTask(string windowId, string windowName, int windowInterval, int delayWindowCount,ICalculate calc)
+        public void AddOrUpdateWindowTask(string windowId, string windowName, bool isOpenWindow, int windowInterval, int delayWindowCount, List<ICalculate> calcs)
         {
             if (!_winList.ContainsKey(windowId))
             {
-                IWindowTask window = new Core.Window.WindowTask(windowId, windowName, windowInterval, delayWindowCount, calc)
+                IWindowTask window = new Core.Window.WindowTask(windowId, windowName, isOpenWindow,windowInterval,delayWindowCount, calcs)
                 {
                     GlobalContext = _context
                 };
@@ -249,8 +252,8 @@ namespace CSharpFlink.Core.Task
                     window.Name = windowName;
                     window.WindowInterval = windowInterval;
                     window.DelayWindowCount = delayWindowCount;
-                    window.CalculateOperator = calc;
-                    //window.AggregateCalculateType = ct;
+                    window.CalculateOperators = calcs;
+                    window.IsOpenWindow = isOpenWindow;
                 }
             }
         }
@@ -260,7 +263,14 @@ namespace CSharpFlink.Core.Task
             if (_winList.ContainsKey(windowId))
             {
                 IWindowTask windowTask;
-                _winList.TryRemove(windowId,out windowTask);
+                if(_winList.TryRemove(windowId,out windowTask))
+                {
+                    if(windowTask!=null)
+                    {
+                        windowTask.Dispose();
+                        windowTask = null;
+                    }
+                }
             }
         }
 
@@ -268,10 +278,28 @@ namespace CSharpFlink.Core.Task
         {
             return _winList[windowId];
         }
+        public string[] GetAllWindowId()
+        {
+            return _winList.Keys.ToArray();
+        }
 
         public bool ContainsWindow(string windowId)
         {
             return _winList.ContainsKey(windowId);
+        }
+
+        public bool ContainsExpression(string expId)
+        {
+            return _expList.ContainsKey(expId);
+        }
+
+        public IExpressionTask GetExpression(string expId)
+        {
+            return _expList[expId];
+        }
+        public string[] GetAllExpressionId()
+        {
+            return _expList.Keys.ToArray();
         }
 
         public void AddMetaData(string windowId, IMetaData md)
@@ -284,7 +312,7 @@ namespace CSharpFlink.Core.Task
                 {
                     if (kv.Value.ExpressionCalculateType == ExpressionCalculateType.ValueChangedCalculate)
                     {
-                        if (kv.Value.PatternDataList.Contains(md.tag_id))
+                        if (kv.Value.PatternDataList.Contains(md.TagId))
                         {
                             ((ExpressionTask)kv.Value).PublishCalculate();
                         }
@@ -293,11 +321,11 @@ namespace CSharpFlink.Core.Task
             }
         }
 
-        public void AddExpressionTask(string expId, string expName, ExpressionCalculateType expCalculateType, int timerInterval, string script,ICalculate calc)
+        public void AddOrUpdateExpressionTask(string expId, string expName, ExpressionCalculateType expCalculateType, int timerInterval, string script,List<ICalculate> calcs)
         {
             if (!_expList.ContainsKey(expId))
             {
-                IExpressionTask expTask = new ExpressionTask(expId, expName, expCalculateType, timerInterval,script,calc)
+                IExpressionTask expTask = new ExpressionTask(expId, expName, expCalculateType, timerInterval,script,calcs)
                 {
                     GlobalContext = _context
                 };
@@ -313,7 +341,7 @@ namespace CSharpFlink.Core.Task
                     expTask.Script = script;
                     expTask.ExpressionCalculateType = expCalculateType;
                     expTask.TimerInterval = timerInterval;
-                    expTask.CalculateOperator = calc;
+                    expTask.CalculateOperators = calcs;
                 }
             }
         }
@@ -323,7 +351,14 @@ namespace CSharpFlink.Core.Task
             if (_expList.ContainsKey(expId))
             {
                 IExpressionTask expTask;
-                _expList.TryRemove(expId, out expTask);
+                if(_expList.TryRemove(expId, out expTask))
+                {
+                    if(expTask!=null)
+                    {
+                        expTask.Dispose();
+                        expTask = null;
+                    }
+                }
             }
         }
 
@@ -355,10 +390,13 @@ namespace CSharpFlink.Core.Task
                 if (_workList.ContainsKey(id))
                 {
                     IWorker worker;
-                    _workList.TryRemove(id, out worker);
-                    if(worker!=null)
+                    if (_workList.TryRemove(id, out worker))
                     {
-                        worker.PublishCalculateCompleted -= null;
+                        if (worker != null)
+                        {
+                            worker.PublishCalculateCompleted -= null;
+                            worker = null;
+                        }
                     }
                 }
             }
@@ -379,22 +417,23 @@ namespace CSharpFlink.Core.Task
                 {
                     foreach (IMetaData md in context.CalculateInpute.DataSource)
                     {
-                        if (_winList.ContainsKey(md.tag_id))
+                        if (_winList.ContainsKey(md.TagId))
                         {
-                            md.tag_name = _winList[md.tag_id].Current.tag_name;
-                            md.tag_time = _winList[md.tag_id].Current.tag_time;
-                            md.tag_value = _winList[md.tag_id].Current.tag_value;
+                            md.TagName = _winList[md.TagId].Current.TagName;
+                            md.TagTime = _winList[md.TagId].Current.TagTime;
+                            md.TagValue = _winList[md.TagId].Current.TagValue;
                         }
                         else
                         {
                             isCalc = false;
+                            break;
                         }
                     }
                 }
 
                 if (isCalc)
                 {
-                    if (MasterServer.ClientCount > 0)
+                    if (_channelMessageHandler.ClientCount > 0)
                     {
                         #region
                         CalculateContext calcContext=(CalculateContext)context;
@@ -536,5 +575,6 @@ namespace CSharpFlink.Core.Task
 
             _disposed = true;
         }
+       
     }
 }
